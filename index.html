@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="description" content="Emoji Blasters — Asteroids, but everything is an emoji. Rotate, thrust, blast rocks (and snacks, and sea monsters) into smaller rocks.">
 <meta name="theme-color" content="#05060d">
 <title>Emoji Blasters</title>
@@ -24,7 +24,7 @@
     -webkit-tap-highlight-color: transparent;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   }
-  #game { display: block; position: fixed; inset: 0; width: 100%; height: 100%; }
+  #game { display: block; position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
 
 </style>
 </head>
@@ -904,6 +904,20 @@
   const fireTouch = { id: null, x0: 0, y0: 0, t0: 0, moved: false };
   const touch = { enabled: false };
   function enableTouch() { touch.enabled = true; }
+  // A double-tap or pinch that zooms a full-screen canvas has no way back:
+  // there is no page chrome to pinch out on. touch-action alone is not
+  // honoured everywhere (iOS Safari, and any host page that embeds this one
+  // in a frame), so refuse the gestures at the touch layer too, and pin the
+  // viewport meta at runtime so an embedding page's own tag is overridden.
+  document.addEventListener('touchend', e => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+  document.addEventListener('touchmove', e => { if (e.touches.length > 1 && e.cancelable) e.preventDefault(); }, { passive: false });
+  document.addEventListener('gesturestart', e => e.preventDefault());
+  document.addEventListener('dblclick', e => e.preventDefault());
+  {
+    let vp = document.querySelector('meta[name="viewport"]');
+    if (!vp) { vp = document.createElement('meta'); vp.name = 'viewport'; document.head.appendChild(vp); }
+    vp.content = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
+  }
   if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) enableTouch();
   window.addEventListener('touchstart', enableTouch, { once: true, passive: true });
 
