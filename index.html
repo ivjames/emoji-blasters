@@ -7,7 +7,15 @@
 <meta name="theme-color" content="#05060d">
 <title>Emoji Blasters</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    /* Safe-area insets, read by the HUD so it stays clear of the notch and
+       home indicator under viewport-fit=cover. */
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+  }
   html, body {
     margin: 0; padding: 0; height: 100%;
     background: #05060d; color: #e8ecf5;
@@ -18,52 +26,10 @@
   }
   #game { display: block; position: fixed; inset: 0; width: 100%; height: 100%; }
 
-  /* On-screen controls: shown only on coarse-pointer devices (see JS). */
-  #touch { position: fixed; inset: 0; pointer-events: none; }
-  #touch[hidden] { display: none; }
-  #touch .pad {
-    position: absolute; bottom: max(18px, env(safe-area-inset-bottom));
-    display: flex; gap: 12px; pointer-events: auto;
-  }
-  #touch .pad.left  { left:  max(16px, env(safe-area-inset-left)); }
-  #touch .pad.right { right: max(16px, env(safe-area-inset-right)); }
-  #touch button {
-    width: 68px; height: 68px; border-radius: 50%;
-    border: 2px solid rgba(255,255,255,.28);
-    background: rgba(255,255,255,.08); color: #fff;
-    font-size: 30px; line-height: 1; padding: 0;
-    touch-action: none; -webkit-user-select: none; user-select: none;
-  }
-  #touch button.small { width: 52px; height: 52px; font-size: 22px; align-self: flex-end; }
-  #touch button.on { background: rgba(255,255,255,.28); border-color: rgba(255,255,255,.7); }
-  /* Narrow phones: the two pads are 392px wide at full size and would overlap. */
-  @media (max-width: 420px) {
-    #touch .pad { gap: 8px; }
-    #touch button { width: 56px; height: 56px; font-size: 24px; }
-    #touch button.small { width: 44px; height: 44px; font-size: 18px; }
-  }
-  @media (max-width: 340px) {
-    #touch .pad { gap: 6px; }
-    #touch .pad.left  { left: 12px; }
-    #touch .pad.right { right: 12px; }
-    #touch button { width: 50px; height: 50px; font-size: 22px; }
-    #touch button.small { width: 40px; height: 40px; font-size: 16px; }
-  }
 </style>
 </head>
 <body>
 <canvas id="game" aria-label="Emoji Blasters game canvas" role="img"></canvas>
-<div id="touch" hidden aria-hidden="true">
-  <div class="pad left">
-    <button type="button" data-k="left"  aria-label="Rotate left">◀</button>
-    <button type="button" data-k="right" aria-label="Rotate right">▶</button>
-  </div>
-  <div class="pad right">
-    <button type="button" data-k="hyper" class="small" aria-label="Hyperspace">🌀</button>
-    <button type="button" data-k="thrust" aria-label="Thrust">🔥</button>
-    <button type="button" data-k="fire"   aria-label="Fire">💥</button>
-  </div>
-</div>
 <script>
 (() => {
   'use strict';
@@ -129,6 +95,7 @@
   const ctx = canvas.getContext('2d');
   let W = 0, H = 0, DPR = 1;
   let stars = [];
+  const SAFE = { top: 0, bottom: 0, left: 0, right: 0 };
 
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -141,6 +108,9 @@
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const cs = getComputedStyle(document.documentElement);
+    const px = v => parseFloat(cs.getPropertyValue(v)) || 0;
+    SAFE.top = px('--sat'); SAFE.bottom = px('--sab'); SAFE.left = px('--sal'); SAFE.right = px('--sar');
     const n = Math.round((W * H) / 9000);
     stars = Array.from({ length: n }, () => ({
       x: Math.random() * W, y: Math.random() * H,
@@ -289,14 +259,19 @@
   let ship = null;
   let asteroids = [], bullets = [], particles = [], popups = [], powerups = [];
   let ufo = null;
-  const input = { left: false, right: false, thrust: false, fire: false, hyper: false };
+  const input = { left: false, right: false, thrust: false, fire: false, hyper: false, steer: null, throttle: 0 };
+  function resetInput() {
+    input.left = input.right = input.thrust = input.fire = input.hyper = false;
+    input.steer = null; input.throttle = 0;
+    stick.id = null; stick.active = false; fireTouch.id = null;
+  }
   const edge = { hyper: false };                // rising-edge latch
 
   function newShip() {
     return {
       x: W / 2, y: H / 2, vx: 0, vy: 0, a: -Math.PI / 2,
       invuln: SHIP.invuln, fireCd: 0, shield: 0, rapid: 0,
-      hyperCd: 0, hyperT: 0, hyperTo: null, thrusting: false,
+      hyperCd: 0, hyperT: 0, hyperTo: null, thrusting: false, throttle: 0,
     };
   }
 
@@ -504,10 +479,16 @@
       } else {
         if (input.left)  ship.a -= SHIP.turn * dt;
         if (input.right) ship.a += SHIP.turn * dt;
-        ship.thrusting = input.thrust;
+        if (input.steer !== null) {          // thumb-stick: turn toward the thumb, shortest way round
+          const d = Math.atan2(Math.sin(input.steer - ship.a), Math.cos(input.steer - ship.a));
+          const step = SHIP.turn * 1.6 * dt;
+          ship.a += clamp(d, -step, step);
+        }
+        ship.throttle = input.thrust ? 1 : input.throttle;
+        ship.thrusting = ship.throttle > 0;
         if (ship.thrusting) {
-          ship.vx += Math.cos(ship.a) * SHIP.thrust * dt;
-          ship.vy += Math.sin(ship.a) * SHIP.thrust * dt;
+          ship.vx += Math.cos(ship.a) * SHIP.thrust * ship.throttle * dt;
+          ship.vy += Math.sin(ship.a) * SHIP.thrust * ship.throttle * dt;
           const sp = Math.hypot(ship.vx, ship.vy);
           if (sp > SHIP.maxSpeed) { ship.vx *= SHIP.maxSpeed / sp; ship.vy *= SHIP.maxSpeed / sp; }
         }
@@ -707,7 +688,7 @@
       const blink = ship.invuln > 0 && Math.floor(ship.invuln * 12) % 2 === 0;
       if (!blink) {
         if (ship.thrusting) {
-          const fs = 20 + Math.random() * 8;
+          const fs = (20 + Math.random() * 8) * (0.55 + 0.45 * ship.throttle);
           drawEmoji('🔥', ship.x - Math.cos(ship.a) * 24, ship.y - Math.sin(ship.a) * 24, fs, ship.a - Math.PI / 2, 0.95);
         }
         drawEmoji(SHIP.emoji, ship.x, ship.y, SHIP.size, ship.a + SHIP.tilt);
@@ -759,34 +740,47 @@
     const small = W < 520;
     const fs = small ? 14 : 17;
     const pad = small ? 12 : 18;
-    const bottom = touch.enabled ? 96 : 0;
+    const padT = pad + SAFE.top, padB = pad + SAFE.bottom, padL = pad + SAFE.left, padR = pad + SAFE.right;
     if (S.mode !== 'title') {
-      text(String(S.score).padStart(6, '0'), pad, pad, fs + 6, { weight: 700 });
-      text(`HI ${String(S.hi).padStart(6, '0')}`, pad, pad + fs + 12, fs - 2, { color: '#8a93a8' });
+      text(String(S.score).padStart(6, '0'), padL, padT, fs + 6, { weight: 700 });
+      text(`HI ${String(S.hi).padStart(6, '0')}`, padL, padT + fs + 12, fs - 2, { color: '#8a93a8' });
       // lives
       const n = Math.max(0, S.lives);
       const maxIcons = small ? 4 : 8;
-      for (let i = 0; i < Math.min(n, maxIcons); i++) drawEmoji('🚀', W - pad - 12 - i * 26, pad + 12, 22, -Math.PI / 4);
-      if (n > maxIcons) text(`×${n}`, W - pad - 12 - maxIcons * 26, pad + 4, fs - 2, { align: 'right', color: '#8a93a8' });
-      text(`WAVE ${S.wave}`, W / 2, pad, fs, { align: 'center', color: '#8a93a8' });
-      // active powerups + hyperspace (lifted above the on-screen buttons on touch)
+      for (let i = 0; i < Math.min(n, maxIcons); i++) drawEmoji('🚀', W - padR - 12 - i * 26, padT + 12, 22, -Math.PI / 4);
+      if (n > maxIcons) text(`×${n}`, W - padR - 12 - maxIcons * 26, padT + 4, fs - 2, { align: 'right', color: '#8a93a8' });
+      text(`WAVE ${S.wave}`, W / 2, padT, fs, { align: 'center', color: '#8a93a8' });
+      // active powerups + hyperspace
       if (ship) {
-        let y = H - pad - fs - bottom;
+        let y = H - padB - fs;
         if (ship.hyperT <= 0) {
           const ready = ship.hyperCd <= 0;
-          text(`🌀 ${ready ? 'READY' : ship.hyperCd.toFixed(1) + 's'}`, pad, y, fs - 2, { color: ready ? '#e8ecf5' : '#5a6275' });
+          text(`🌀 ${ready ? 'READY' : ship.hyperCd.toFixed(1) + 's'}`, padL, y, fs - 2, { color: ready ? '#e8ecf5' : '#5a6275' });
           y -= fs + 6;
         }
         for (const k of ['shield', 'rapid']) {
           if (ship[k] > 0) {
             const P = POWERUPS[k];
-            text(`${P.emoji} ${P.label} ${ship[k].toFixed(1)}s`, pad, y, fs - 2, { color: '#ffe066' });
+            text(`${P.emoji} ${P.label} ${ship[k].toFixed(1)}s`, padL, y, fs - 2, { color: '#ffe066' });
             y -= fs + 6;
           }
         }
       }
     }
-    text(`build ${BUILD}${audio.muted ? '  ·  🔇' : ''}`, W - pad, H - pad - 10 - bottom, 11, { align: 'right', color: '#3d4456' });
+    text(`build ${BUILD}${audio.muted ? '  ·  🔇' : ''}`, W - padR, H - padB - 10, 11, { align: 'right', color: '#3d4456' });
+    if (stick.active) {
+      ctx.beginPath(); ctx.arc(stick.ox, stick.oy, STICK.radius, 0, 6.28);
+      ctx.fillStyle = 'rgba(255,255,255,.05)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 1.5; ctx.stroke();
+      const dx = stick.x - stick.ox, dy = stick.y - stick.oy, len = Math.hypot(dx, dy) || 1;
+      const k = Math.min(1, STICK.radius / len);
+      ctx.beginPath(); ctx.arc(stick.ox + dx * k, stick.oy + dy * k, 20, 0, 6.28);
+      ctx.fillStyle = `rgba(255,255,255,${0.18 + 0.25 * input.throttle})`; ctx.fill();
+    }
+    if (fireTouch.id !== null) {
+      ctx.beginPath(); ctx.arc(fireTouch.x0, fireTouch.y0, 26, 0, 6.28);
+      ctx.strokeStyle = 'rgba(255,224,102,.35)'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
   }
 
   function panel(w, h) {
@@ -806,12 +800,14 @@
     let y = p.y + (small ? 22 : 34);
     text('EMOJI BLASTERS', cx, y, small ? 30 : 42, { align: 'center', weight: 800 }); y += small ? 40 : 56;
     text('asteroids, but everything is an emoji', cx, y, small ? 12 : 14, { align: 'center', color: '#8a93a8' }); y += small ? 26 : 34;
-    const row = ['🚀', '🪨', '🌑', '☄️', '🛸', '💥'];
+    const row = ['🚀', '🪨', '🌕', '☄️', '🛸', '💥'];
     row.forEach((e, i) => drawEmoji(e, cx + (i - (row.length - 1) / 2) * (small ? 40 : 52), y + 16, small ? 26 : 34,
       e === '🚀' ? -Math.PI / 4 : Math.sin(S.time * 1.5 + i) * 0.3));
     y += small ? 50 : 66;
     const lines = touch.enabled
-      ? ['◀ ▶ rotate  ·  🔥 thrust', '💥 fire  ·  🌀 hyperspace']
+      ? ['left thumb  ·  steer + thrust',
+         'right thumb  ·  hold to fire',
+         'flick the right side  ·  hyperspace']
       : ['← → / A D  rotate      ↑ / W  thrust',
          'SPACE  fire      SHIFT / H  hyperspace',
          'P  pause      M  mute'];
@@ -891,46 +887,71 @@
     if (k) { e.preventDefault(); input[k] = false; }
   });
   window.addEventListener('blur', () => {
-    for (const k in input) input[k] = false;
+    resetInput();
     setPaused(true);
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) setPaused(true);
   });
 
-  // touch controls
-  const touch = { enabled: false, el: document.getElementById('touch') };
-  function enableTouch() {
-    if (touch.enabled) return;
-    touch.enabled = true;
-    touch.el.hidden = false;
-    touch.el.setAttribute('aria-hidden', 'false');
-  }
-  if (window.matchMedia('(pointer: coarse)').matches) enableTouch();
+  // ───────────────────────── touch ─────────────────────────
+  // No buttons. Left half of the screen is a floating thumb-stick: the ship
+  // turns toward your thumb and thrusts by how far you push. Right half:
+  // hold to fire; a quick flick there is hyperspace. `touch.enabled` only
+  // decides which hints the title screen shows.
+  const STICK = { dead: 10, radius: 56, follow: 64 };
+  const stick = { id: null, ox: 0, oy: 0, x: 0, y: 0, active: false };
+  const fireTouch = { id: null, x0: 0, y0: 0, t0: 0, moved: false };
+  const touch = { enabled: false };
+  function enableTouch() { touch.enabled = true; }
+  if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) enableTouch();
   window.addEventListener('touchstart', enableTouch, { once: true, passive: true });
 
-  for (const btn of touch.el.querySelectorAll('button')) {
-    const k = btn.dataset.k;
-    const down = e => {
-      e.preventDefault(); audioInit();
-      btn.classList.add('on'); input[k] = true;
-      if (S.paused) setPaused(false);
-      if (k === 'hyper') edge.hyper = true;   // after unpause, so the button's own jump still fires
-      if (k === 'fire' && S.mode !== 'play') primary();
-      try { btn.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    };
-    const up = e => { e.preventDefault(); btn.classList.remove('on'); input[k] = false; };
-    btn.addEventListener('pointerdown', down);
-    btn.addEventListener('pointerup', up);
-    btn.addEventListener('pointercancel', up);
-    btn.addEventListener('lostpointercapture', up);
-    btn.addEventListener('contextmenu', e => e.preventDefault());
-  }
   canvas.addEventListener('pointerdown', e => {
     e.preventDefault();
     audioInit();
-    if (S.mode !== 'play' || S.paused) primary();
+    if (e.pointerType === 'touch') enableTouch();
+    if (S.mode !== 'play' || S.paused) { primary(); return; }
+    if (e.pointerType === 'mouse') return;
+    if (e.clientX < W / 2) {
+      if (stick.id !== null) return;
+      stick.id = e.pointerId; stick.active = true;
+      stick.ox = stick.x = e.clientX; stick.oy = stick.y = e.clientY;
+    } else {
+      if (fireTouch.id !== null) return;
+      fireTouch.id = e.pointerId; fireTouch.x0 = e.clientX; fireTouch.y0 = e.clientY;
+      fireTouch.t0 = performance.now(); fireTouch.moved = false;
+      input.fire = true;
+    }
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
   });
+  canvas.addEventListener('pointermove', e => {
+    if (e.pointerId === stick.id) {
+      stick.x = e.clientX; stick.y = e.clientY;
+      let dx = stick.x - stick.ox, dy = stick.y - stick.oy, len = Math.hypot(dx, dy);
+      if (len > STICK.follow) {             // the ring follows a thumb that wanders off
+        const k = STICK.follow / len;
+        stick.ox = stick.x - dx * k; stick.oy = stick.y - dy * k;
+        dx *= k; dy *= k; len = STICK.follow;
+      }
+      if (len > STICK.dead) {
+        input.steer = Math.atan2(dy, dx);
+        input.throttle = clamp((len - STICK.dead) / (STICK.radius - STICK.dead), 0, 1);
+      } else { input.steer = null; input.throttle = 0; }
+    } else if (e.pointerId === fireTouch.id) {
+      if (Math.hypot(e.clientX - fireTouch.x0, e.clientY - fireTouch.y0) > 40) fireTouch.moved = true;
+    }
+  });
+  const pointerEnd = e => {
+    if (e.pointerId === stick.id) {
+      stick.id = null; stick.active = false; input.steer = null; input.throttle = 0;
+    } else if (e.pointerId === fireTouch.id) {
+      fireTouch.id = null; input.fire = false;
+      if (fireTouch.moved && performance.now() - fireTouch.t0 < 450) edge.hyper = true;   // a flick
+    }
+  };
+  canvas.addEventListener('pointerup', pointerEnd);
+  canvas.addEventListener('pointercancel', pointerEnd);
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 
   // ───────────────────────── loop ─────────────────────────
