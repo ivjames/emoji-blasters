@@ -7,7 +7,15 @@
 <meta name="theme-color" content="#05060d">
 <title>Emoji Blasters</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    /* Safe-area insets, read by the HUD so it stays clear of the notch and
+       home indicator under viewport-fit=cover. */
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+  }
   html, body {
     margin: 0; padding: 0; height: 100%;
     background: #05060d; color: #e8ecf5;
@@ -87,6 +95,7 @@
   const ctx = canvas.getContext('2d');
   let W = 0, H = 0, DPR = 1;
   let stars = [];
+  const SAFE = { top: 0, bottom: 0, left: 0, right: 0 };
 
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -99,6 +108,9 @@
     canvas.style.width = W + 'px';
     canvas.style.height = H + 'px';
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    const cs = getComputedStyle(document.documentElement);
+    const px = v => parseFloat(cs.getPropertyValue(v)) || 0;
+    SAFE.top = px('--sat'); SAFE.bottom = px('--sab'); SAFE.left = px('--sal'); SAFE.right = px('--sar');
     const n = Math.round((W * H) / 9000);
     stars = Array.from({ length: n }, () => ({
       x: Math.random() * W, y: Math.random() * H,
@@ -728,33 +740,34 @@
     const small = W < 520;
     const fs = small ? 14 : 17;
     const pad = small ? 12 : 18;
+    const padT = pad + SAFE.top, padB = pad + SAFE.bottom, padL = pad + SAFE.left, padR = pad + SAFE.right;
     if (S.mode !== 'title') {
-      text(String(S.score).padStart(6, '0'), pad, pad, fs + 6, { weight: 700 });
-      text(`HI ${String(S.hi).padStart(6, '0')}`, pad, pad + fs + 12, fs - 2, { color: '#8a93a8' });
+      text(String(S.score).padStart(6, '0'), padL, padT, fs + 6, { weight: 700 });
+      text(`HI ${String(S.hi).padStart(6, '0')}`, padL, padT + fs + 12, fs - 2, { color: '#8a93a8' });
       // lives
       const n = Math.max(0, S.lives);
       const maxIcons = small ? 4 : 8;
-      for (let i = 0; i < Math.min(n, maxIcons); i++) drawEmoji('🚀', W - pad - 12 - i * 26, pad + 12, 22, -Math.PI / 4);
-      if (n > maxIcons) text(`×${n}`, W - pad - 12 - maxIcons * 26, pad + 4, fs - 2, { align: 'right', color: '#8a93a8' });
-      text(`WAVE ${S.wave}`, W / 2, pad, fs, { align: 'center', color: '#8a93a8' });
+      for (let i = 0; i < Math.min(n, maxIcons); i++) drawEmoji('🚀', W - padR - 12 - i * 26, padT + 12, 22, -Math.PI / 4);
+      if (n > maxIcons) text(`×${n}`, W - padR - 12 - maxIcons * 26, padT + 4, fs - 2, { align: 'right', color: '#8a93a8' });
+      text(`WAVE ${S.wave}`, W / 2, padT, fs, { align: 'center', color: '#8a93a8' });
       // active powerups + hyperspace
       if (ship) {
-        let y = H - pad - fs;
+        let y = H - padB - fs;
         if (ship.hyperT <= 0) {
           const ready = ship.hyperCd <= 0;
-          text(`🌀 ${ready ? 'READY' : ship.hyperCd.toFixed(1) + 's'}`, pad, y, fs - 2, { color: ready ? '#e8ecf5' : '#5a6275' });
+          text(`🌀 ${ready ? 'READY' : ship.hyperCd.toFixed(1) + 's'}`, padL, y, fs - 2, { color: ready ? '#e8ecf5' : '#5a6275' });
           y -= fs + 6;
         }
         for (const k of ['shield', 'rapid']) {
           if (ship[k] > 0) {
             const P = POWERUPS[k];
-            text(`${P.emoji} ${P.label} ${ship[k].toFixed(1)}s`, pad, y, fs - 2, { color: '#ffe066' });
+            text(`${P.emoji} ${P.label} ${ship[k].toFixed(1)}s`, padL, y, fs - 2, { color: '#ffe066' });
             y -= fs + 6;
           }
         }
       }
     }
-    text(`build ${BUILD}${audio.muted ? '  ·  🔇' : ''}`, W - pad, H - pad - 10, 11, { align: 'right', color: '#3d4456' });
+    text(`build ${BUILD}${audio.muted ? '  ·  🔇' : ''}`, W - padR, H - padB - 10, 11, { align: 'right', color: '#3d4456' });
     if (stick.active) {
       ctx.beginPath(); ctx.arc(stick.ox, stick.oy, STICK.radius, 0, 6.28);
       ctx.fillStyle = 'rgba(255,255,255,.05)'; ctx.fill();
